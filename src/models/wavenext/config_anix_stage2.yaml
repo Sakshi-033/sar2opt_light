@@ -1,0 +1,30 @@
+﻿system:
+  device: "cuda"
+  precision: "16-mixed"
+  deterministic: false
+  benchmark: true
+  channels_last: false
+  compile: false
+
+  max_epochs: 1
+
+  image_freq: 1
+  limit_train_batches: 20
+  limit_val_batches: 10
+  check_val_every_n_epoch: 1
+
+  use_kid: false
+  empty_cache_each_epoch: false
+
+  tb_version: "anix-sar-stage2-reconstruction"
+
+  weights_ckpt: "C:/Users/Sakshi Tiwari/Desktop/SAR/ANIX-SAR/WaveNeXt/generator.safetensors"
+  resume_ckpt: null
+
+  debug: false
+
+  checkpoints_dir: "checkpoints/anix_wavenext/stage2_reconstruction"
+  output_dir: "./output/anix_sar_stage2"
+  images_dir: "./output/anix_sar_stage2/images"
+  profiler_dir: "./output/anix_sar_stage2/profiler"
+  summary_dir: "./output/anix_sar_stage2/summary"

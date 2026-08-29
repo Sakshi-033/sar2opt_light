@@ -3,7 +3,7 @@
     sen12:            "./data/sen12"
     sen12_full:       "./data/sen12_full"
     sen12_full_align: "./data/sen12_full_align"   # gradient-domain phaseCorrelate->ECC aligned mirror (scripts/align_pairs.py); SAR byte-identical, optical warped
-    qxs_saropt: "C:/Users/Sakshi Tiwari/Desktop/SAR/QXSLAB_SAROPT"      # QXSLAB SAR-OPT (Gaofen-3 SAR + Google Earth optical), 20k 256x256 paired patches; flat layout sar_256_oc_0.2/ + opt_256_oc_0.2/
+    qxs_saropt: "C:/Users/Sakshi Tiwari/Desktop/SAR/QXSLAB_SAROPT"
   dataset: "qxs_saropt"              # SAWG trains on RAW (unaligned) data: the learned online aligner attacks real misregistration in-loop (replaces offline ECC). switch: "sen12_full" (raw) | "sen12_full_align" (aligned A/B) | "qxs_saropt" (QXSLAB transfer-learning target). train.py picks the matching datamodule + data_root.
   # Same 5-scene subset for the smoke. Switch to the 9-list before the
   # production run: ["5","10","25","35","45","47","52","84","100"].
@@ -179,7 +179,7 @@ system:
   benchmark:     true
   channels_last: true                               # NHWC memory format â€” +10-15% on conv-heavy Ada kernels
   compile:       false                              # Windows venv lacks triton â€” eager only
-  max_epochs: 2                                 # v0.4.3 headline: 200ep warm-start from R2 ep56 (best W3 ckpt) for max-quality production training
+  max_epochs:    200                                 # v0.4.3 headline: 200ep warm-start from R2 ep56 (best W3 ckpt) for max-quality production training
   image_freq:    5                                   # 200ep / 5 = 40 visualizations â€” manageable disk footprint
   limit_train_batches: 1.0                           # prod: full train set per epoch
   limit_val_batches:   1.0                           # prod: full val set per epoch
@@ -196,3 +196,4 @@ system:
   images_dir:      "./output/llwt_v45/images"
   profiler_dir:    "./output/llwt_v45/profiler"
   summary_dir:     "./output/llwt_v45/summary"
+
