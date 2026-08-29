@@ -1,115 +1,266 @@
-# WaveNeXt — SAR → Optical
+# WaveNeXt: SAR-to-Optical Satellite Image Translation
 
-Перевод одноканального радиолокационного изображения (**SAR**, Sentinel-1) в
-трёхканальную оптику (**Sentinel-2-like**). Магистерская ВКР.
+WaveNeXt is a deep learning framework for **SAR-to-optical satellite image translation**, designed to generate RGB optical imagery from Synthetic Aperture Radar (SAR) observations.
 
-**WaveNeXt** = *Wavelet + ConvNeXt*:
+The project combines **ConvNeXtV2**, **Haar wavelet decomposition**, adversarial learning, perceptual losses, and frequency-domain constraints to improve structural and high-frequency detail in generated optical images.
 
-- **Вейвлет** — фиксированный ортонормированный двухуровневый Хаар-стем (вместо
-  patch-embed) и обратный Хаар на голове реконструкции (`register_buffer`).
-- **ConvNeXt V2** — свёрточный бэкбон, перенос признаков с ImageNet-22k.
-- Состязательное обучение GAN с **высокочастотным дискриминатором HF-D** на остатке
-  `x − gaussian_blur(x)` — только на обучении, без накладных расходов на инференсе.
+## Overview
 
-Полное устройство с картой `файл:строка` — `src/models/wavenext/ARCHITECTURE.md`.
+Synthetic Aperture Radar (SAR) imagery can be collected under conditions where optical satellite imagery is unavailable, such as at night or under cloud cover. However, SAR and optical imagery have substantially different visual characteristics.
 
-> Возвращаешься к проекту после перерыва? Начни с **`RESUME.md`** — карта проекта,
-> статус, что лежит локально/в гите/на HF, и грабли, которые нельзя ломать.
-
-## Результаты (SEN1-2 held-out val)
-
-| Вариант | PSNR↑ | SSIM↑ | FID↓ | LPIPS↓ |
-|--|--|--|--|--|
-| **WaveNeXt Base** | **18.54** | **0.432** | **58.5** | **0.241** |
-| WaveNeXt Tiny | 17.28 | 0.369 | 73.0 | 0.311 |
-
-Веса (Base) + ONNX + model card: **[umpaoflumpia/WaveNeXt](https://huggingface.co/umpaoflumpia/WaveNeXt)** на Hugging Face.
-
-## Структура репозитория
-
-- `src/models/wavenext/` — единственная модель: генератор, дискриминаторы (Main + HF-D),
-  лоссы, тренировочный цикл, инференс, экспорт. `ARCHITECTURE.md` — референс.
-- `src/data/sen12_full/`, `src/data/sen12_full_align/` — датамодули SEN1-2 (raw / ECC-выровненный).
-- `src/utils/` — логгер, EMA-коллбек, очистка памяти, нотификации.
-- `scripts/` — вспомогательные скрипты (выравнивание пар и т.п.).
-- `docs/diploma/` — текст ВКР.
-
-> Полное наследие экспериментов (cfrwd, llwt v3/v4/v45, sarformer и др.) удалено из
-> рабочего дерева и сохранено в git-теге **`archive/full-lineage-v1`** — оттуда
-> воспроизводится абляционная таблица диплома.
-
-## Установка
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-GPU с CUDA нужен для обучения (RTX-класс, ~18.5 ГБ VRAM для Base @ bf16).
-
-## Быстрый старт
-
-```powershell
-# обучение (config.yaml = Base backbone + HF-D, тёплый старт)
-python -m src.models.wavenext.train
-
-# одношаговый смоук (быстрый, config_smoke.yaml)
-python -m src.models.wavenext.smoke_train_step
-
-# инференс (грузит Base-чекпоинт через load_generator)
-python -m src.models.wavenext.inference
-
-# экспорт весов для Hugging Face (ckpt -> safetensors + config.json)
-python -m src.models.wavenext.export_hf  --ckpt <path/to.ckpt> --out output/hf_export
-
-# экспорт в ONNX (fp32, opset 17, с parity-проверкой)
-python -m src.models.wavenext.export_onnx --ckpt <path/to.ckpt> --out output/hf_export
-
-# TensorBoard
-tensorboard --logdir output/llwt_v45/tb_logs
-```
-
-## Конфиг — переключатели (без правки кода)
-
-`src/models/wavenext/config.yaml` (путь захардкожен в `train.py`/`main.py`/`factory.py`):
-
-- **Ёмкость** — `model.gen.backbone`: `facebook/convnextv2-base-22k-224` (Base, дефолт,
-  `data.batch_size: 6`) или `...-tiny-22k-224` (Tiny, `batch_size: 8`). Каналы стадий
-  авто-выводятся из бэкбона.
-- **HF-D** (новизна) — `loss.hfd_weight`: `1.0` (вкл) или `0` (выкл → чистый baseline / абляция).
-- `system.tb_version` — имя для всех артефактов; меняй на каждый эксперимент.
-- `system.weights_ckpt` — тёплый старт G/D (`strict=False`); `system.resume_ckpt` — полное возобновление или `null`.
-
-## Данные (SEN1-2)
-
-`data.dataset` выбирает датамодуль: `sen12_full` (raw) или `sen12_full_align`
-(градиентный ECC-выровненный зеркальный набор; SAR байт-в-байт, оптика деформирована).
+WaveNeXt learns a mapping from SAR imagery to optical imagery:
 
 ```text
-data/sen12_full/<scene>/s1/<file>   # SAR
-data/sen12_full/<scene>/s2/<file>   # optical
+                    SAR Input
+                        │
+                        ▼
+             Haar Wavelet Decomposition
+                        │
+                        ▼
+               ConvNeXtV2 Backbone
+                        │
+                        ▼
+                    Decoder
+                        │
+                        ▼
+              Wavelet Reconstruction
+                        │
+                        ▼
+                Generated RGB Image
 ```
-Пары сопоставляются по имени (`_s1_` → `_s2_`). [SEN1-2](https://mediatum.ub.tum.de/1436631), research-only.
 
-> **Обучение на фиксированном репрезентативном подмножестве из 5 сцен** SEN1-2
-> (`5, 45, 52, 84, 100`, поле `data.scenes`) — не на полном датасете. Сцены покрывают
-> разную местность; генерализация на незнакомые регионы/сенсоры не гарантируется.
+The model is trained using paired SAR-optical satellite imagery.
 
-## Артефакты
+## Key Features
 
-По `cfg.system.tb_version` (префикс путей `llwt_v45` — легаси от тёплого старта):
+- ConvNeXtV2-based generator
+- Haar wavelet-based decomposition and reconstruction
+- High-frequency-aware discriminator
+- Adversarial training
+- Feature matching loss
+- MS-SSIM structural loss
+- LAB chroma loss
+- Wavelet-detail reconstruction loss
+- LPIPS perceptual loss
+- Focal Frequency Loss
+- PatchNCE contrastive loss
+- PyTorch Lightning training pipeline
+- Full validation-set evaluation
+- PSNR, SSIM, LPIPS and FID evaluation
+- Configurable training and inference pipelines
 
-- чекпоинты: `checkpoints/llwt_v45/<tb_version>/` (top-k по `val/psnr` + `last`)
-- TensorBoard: `output/llwt_v45/tb_logs/<tb_version>/`
-- изображения эпох: `output/llwt_v45/images/<tb_version>/`
+## Architecture
 
-## Прочее
+WaveNeXt explicitly incorporates wavelet subbands into the image translation process.
 
-- **Telegram** (опц.): `.env` ключи `TELEGRAM_BOT_TOKEN` / `TELEGRAM_RECIEVER_USER_ID`. Нет ключей — молча выкл.
-- **Журнал экспериментов**: `changelog.md` (run id, изменения, результат; версии `vX.Y.Z`).
+```text
+                         SAR Input
+                            │
+                            ▼
+                 ┌─────────────────────┐
+                 │   Haar Wavelet       │
+                 │   Decomposition     │
+                 └──────────┬──────────┘
+                            │
+                            ▼
+                 ┌─────────────────────┐
+                 │     ConvNeXtV2      │
+                 │      Backbone       │
+                 └──────────┬──────────┘
+                            │
+                            ▼
+                 ┌─────────────────────┐
+                 │       Decoder       │
+                 └──────────┬──────────┘
+                            │
+                            ▼
+                 ┌─────────────────────┐
+                 │  Wavelet Subband    │
+                 │   Reconstruction    │
+                 └──────────┬──────────┘
+                            │
+                            ▼
+                      Optical RGB
+                         Output
+```
 
-## Лицензия
+## Loss Functions
 
-**CC-BY-NC-4.0** (non-commercial). Веса производны от ConvNeXt V2 (Meta, CC-BY-NC-4.0)
-и обучены на SEN1-2 (research-only) — non-commercial-условия наследуются.
+WaveNeXt uses a composite objective combining adversarial, structural, perceptual, and frequency-domain constraints.
+
+### Adversarial Loss
+
+Encourages generated images to produce realistic optical imagery.
+
+### Feature Matching
+
+Encourages the generator to reproduce intermediate discriminator features of the target optical image.
+
+### MS-SSIM
+
+Encourages structural similarity between generated and target images.
+
+### LAB Chroma Loss
+
+Encourages accurate colour information in generated optical imagery.
+
+### Wavelet Detail Loss
+
+Constrains high-frequency wavelet components to preserve spatial details.
+
+### LPIPS
+
+Provides perceptual similarity supervision between generated and target images.
+
+### Focal Frequency Loss
+
+Encourages reconstruction of important frequency-domain information.
+
+### PatchNCE
+
+Provides local contrastive supervision between corresponding image features.
+
+## Dataset
+
+The project uses the **QXSLAB_SAROPT** paired SAR-optical dataset.
+
+The training pipeline operates on paired SAR and optical satellite images at a resolution of **256 × 256 pixels**.
+
+Current configured split:
+
+| Split | Samples |
+|---|---:|
+| Training | 16,000 |
+| Validation | 4,000 |
+| Total | 20,000 |
+
+## Evaluation
+
+WaveNeXt includes evaluation using:
+
+| Metric | Purpose |
+|---|---|
+| PSNR | Pixel-level reconstruction quality |
+| SSIM | Structural similarity |
+| LPIPS | Perceptual similarity |
+| FID | Distribution-level image quality |
+
+Full validation evaluation is implemented in:
+
+```text
+src/models/wavenext/eval_full.py
+```
+
+Top-K per-scene inference is implemented in:
+
+```text
+src/models/wavenext/best_inference.py
+```
+
+## Project Structure
+
+```text
+WaveNeXt-src/
+│
+├── src/
+│   └── models/
+│       └── wavenext/
+│           ├── gen.py
+│           ├── dis.py
+│           ├── blocks.py
+│           ├── losses.py
+│           ├── main.py
+│           ├── train.py
+│           ├── eval_full.py
+│           ├── best_inference.py
+│           ├── inference.py
+│           ├── factory.py
+│           └── config*.yaml
+│
+├── docs/
+│   └── diploma/
+│
+├── checkpoints/
+│
+├── README.md
+└── .gitignore
+```
+
+## Technology Stack
+
+### Deep Learning
+
+- PyTorch
+- PyTorch Lightning
+- TorchMetrics
+
+### Model Components
+
+- ConvNeXtV2
+- Haar Wavelets
+- Generative Adversarial Networks
+- Perceptual Losses
+- Frequency-domain Losses
+- Contrastive Learning
+
+### Supporting Tools
+
+- Hugging Face Transformers
+- OmegaConf
+- Python
+- Git
+
+## Training
+
+Training configurations are provided under:
+
+```text
+src/models/wavenext/
+```
+
+The project uses **PyTorch Lightning** for training, checkpointing, validation, and experiment management.
+
+Large model checkpoints and generated experiment artifacts are excluded from version control.
+
+## Inference
+
+Inference utilities are provided under:
+
+```text
+src/models/wavenext/
+```
+
+Run the top-K per-scene inference pipeline with:
+
+```bash
+python -m src.models.wavenext.best_inference
+```
+
+Run full validation evaluation with:
+
+```bash
+python -m src.models.wavenext.eval_full
+```
+
+## Results
+
+Final benchmark results are currently being validated and will be added after reproducing the evaluation using the released pipeline.
+
+| Metric | Result |
+|---|---:|
+| PSNR | TBD |
+| SSIM | TBD |
+| LPIPS | TBD |
+| FID | TBD |
+
+## Reproducibility
+
+The repository contains the model architecture, training pipeline, loss functions, evaluation utilities, and configuration files used for the project.
+
+Environment-specific files, secrets, virtual environments, large checkpoints, and generated outputs are excluded from version control.
+
+## Project Status
+
+WaveNeXt is an experimental research implementation for **SAR-to-optical satellite image translation**.
+
+The repository currently focuses on the model architecture, training pipeline, loss design, evaluation framework, and reproducibility of the experiments.
